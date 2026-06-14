@@ -18,6 +18,18 @@ namespace FoodHub
         {
             var builder = WebApplication.CreateBuilder(args);
 
+            // CORS - allow the React dev server
+            builder.Services.AddCors(options =>
+            {
+                options.AddPolicy("AllowReactApp", policy =>
+                {
+                    policy.WithOrigins("http://localhost:5173")
+                          .AllowAnyHeader()
+                          .AllowAnyMethod()
+                          .AllowCredentials();
+                });
+            });
+
             // Database
             builder.Services.AddDbContext<ApplicationDbContext>(options =>
             {
@@ -144,6 +156,8 @@ namespace FoodHub
                 app.UseSwagger();
                 app.UseSwaggerUI();
             }
+
+            app.UseCors("AllowReactApp");
 
             app.UseHttpsRedirection();
 
