@@ -58,7 +58,17 @@ namespace FoodHub.Services
 
             return new AuthResponseDTO
             {
-                Token = token
+                Token = token,
+                Expiration = DateTime.UtcNow.AddDays(7),
+                Roles = new List<string> { registerDto.Role },
+                User = new UserDTO
+                {
+                    Id = user.Id,
+                    FirstName = user.FirstName,
+                    LastName = user.LastName,
+                    Email = user.Email!,
+                    LoyaltyPoints = user.LoyaltyPoints
+                }
             };
         }
 
@@ -90,7 +100,17 @@ namespace FoodHub.Services
 
             return new AuthResponseDTO
             {
-                Token = token
+                Token = token,
+                Expiration = DateTime.UtcNow.AddDays(7),
+                Roles = roles,
+                User = new UserDTO
+                {
+                    Id = user.Id,
+                    FirstName = user.FirstName,
+                    LastName = user.LastName,
+                    Email = user.Email!,
+                    LoyaltyPoints = user.LoyaltyPoints
+                }
             };
         }
     }
