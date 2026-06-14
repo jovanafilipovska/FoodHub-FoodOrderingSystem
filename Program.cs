@@ -140,6 +140,20 @@ namespace FoodHub
 
             var app = builder.Build();
 
+            using (var scope = app.Services.CreateScope())
+            {
+                // ADD THIS — runs migrations automatically
+                var db = scope.ServiceProvider
+                    .GetRequiredService<ApplicationDbContext>();
+                db.Database.Migrate();
+
+                // existing role seeder (already there)
+                var roleManager = scope.ServiceProvider
+                    .GetRequiredService<RoleManager<IdentityRole>>();
+                DbSeeder.SeedRolesAsync(roleManager).Wait();
+            }
+
+
             // Seed Roles
             using (var scope = app.Services.CreateScope())
             {
