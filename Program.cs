@@ -23,8 +23,10 @@ namespace FoodHub
             {
                 options.AddPolicy("AllowReactApp", policy =>
                 {
-                    policy.WithOrigins("http://localhost:5173")
-                          .AllowAnyHeader()
+                    policy.WithOrigins(
+                        "http://localhost:5173",
+                        "https://foodhubster.netlify.app")
+                           .AllowAnyHeader()
                           .AllowAnyMethod()
                           .AllowCredentials();
                 });
@@ -140,21 +142,21 @@ namespace FoodHub
 
             var app = builder.Build();
 
+            // Run migrations and seed roles
             using (var scope = app.Services.CreateScope())
             {
-                // ADD THIS — runs migrations automatically
                 var db = scope.ServiceProvider
                     .GetRequiredService<ApplicationDbContext>();
                 db.Database.Migrate();
 
-                // existing role seeder (already there)
-                var roleManager = scope.ServiceProvider
+                var roleManager =
+                    scope.ServiceProvider
                     .GetRequiredService<RoleManager<IdentityRole>>();
+
                 DbSeeder.SeedRolesAsync(roleManager).Wait();
             }
 
 
-           
 
             // Middleware
             if (app.Environment.IsDevelopment())
