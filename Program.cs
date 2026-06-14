@@ -154,15 +154,7 @@ namespace FoodHub
             }
 
 
-            // Seed Roles
-            using (var scope = app.Services.CreateScope())
-            {
-                var roleManager =
-                    scope.ServiceProvider
-                    .GetRequiredService<RoleManager<IdentityRole>>();
-
-                DbSeeder.SeedRolesAsync(roleManager).Wait();
-            }
+           
 
             // Middleware
             if (app.Environment.IsDevelopment())
