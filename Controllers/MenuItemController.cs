@@ -51,7 +51,7 @@ namespace FoodHub.Controllers
             return Ok(menuItems);
         }
 
-        [Authorize(Roles = "Owner,Admin")]
+        [Authorize(Roles = "Owner")]
         [HttpPost]
         public async Task<IActionResult> Create(
             [FromBody] CreateMenuItemDTO dto)
@@ -62,7 +62,7 @@ namespace FoodHub.Controllers
             return Ok(menuItem);
         }
 
-        [Authorize(Roles = "Owner,Admin")]
+        [Authorize(Roles = "Owner")]
         [HttpPut("{id}")]
         public async Task<IActionResult> Update(
             int id,
@@ -77,7 +77,7 @@ namespace FoodHub.Controllers
             return Ok(menuItem);
         }
 
-        [Authorize(Roles = "Admin")]
+        [Authorize(Roles = "Owner")]
         [HttpDelete("{id}")]
         public async Task<IActionResult> Delete(int id)
         {

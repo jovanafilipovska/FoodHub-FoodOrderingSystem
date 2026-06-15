@@ -25,7 +25,7 @@ namespace FoodHub.Controllers
             return User.FindFirstValue(ClaimTypes.NameIdentifier);
         }
 
-        [Authorize(Roles = "Admin")]
+        [Authorize(Roles = "Owner")]
         [HttpGet]
         public async Task<IActionResult> GetAll()
         {
@@ -76,7 +76,7 @@ namespace FoodHub.Controllers
             return Ok(order);
         }
 
-        [Authorize(Roles = "Admin,Owner")]
+        [Authorize(Roles = "Owner")]
         [HttpPut("{id}/status")]
         public async Task<IActionResult> UpdateStatus(
             int id,

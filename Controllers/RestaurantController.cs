@@ -59,7 +59,7 @@ namespace FoodHub.Controllers
             return Ok(restaurant);
         }
 
-        [Authorize(Roles = "Owner,Admin")]
+        [Authorize(Roles = "Owner")]
         [HttpPut("{id}")]
         public async Task<IActionResult> Update(
             int id,
@@ -74,7 +74,7 @@ namespace FoodHub.Controllers
             return Ok(restaurant);
         }
 
-        [Authorize(Roles = "Admin")]
+        [Authorize(Roles = "Owner")]
         [HttpDelete("{id}")]
         public async Task<IActionResult> Delete(int id)
         {

@@ -9,7 +9,6 @@ namespace FoodHub.Data
         {
             string[] roles =
             {
-                "Admin",
                 "Owner",
                 "Customer"
             };
