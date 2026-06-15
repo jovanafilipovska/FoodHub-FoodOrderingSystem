@@ -1,6 +1,7 @@
 ﻿using FoodHub.Controllers;
 using FoodHub.DTOs.Restaurant;
 using FoodHub.Services;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using NSubstitute;
 using System.Security.Claims;

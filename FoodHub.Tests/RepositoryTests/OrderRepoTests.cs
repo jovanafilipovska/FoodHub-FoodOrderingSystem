@@ -21,7 +21,7 @@ namespace FoodHub.Test.RepositoryTests
 
             _ctx.Orders.AddRange(
                 new Order { Id = 1, CustomerId = "u1", Status = OrderStatus.Pending },
-                new Order { Id = 2, CustomerId = "u2", Status = OrderStatus.Completed }
+                new Order { Id = 2, CustomerId = "u2", Status = OrderStatus.Delivered }
             );
 
             _ctx.SaveChanges();
@@ -66,7 +66,7 @@ namespace FoodHub.Test.RepositoryTests
         [Fact]
         public async Task GetByStatus_ShouldReturnFilteredOrders()
         {
-            var result = await _sut.GetByStatusAsync(OrderStatus.Completed);
+            var result = await _sut.GetByStatusAsync(OrderStatus.Delivered);
 
             Assert.Single(result);
         }

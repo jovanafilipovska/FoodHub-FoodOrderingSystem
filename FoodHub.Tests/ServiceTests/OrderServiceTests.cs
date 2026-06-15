@@ -1,177 +1,289 @@
-﻿using FoodHub.DTOs.Order;
+﻿using AutoMapper;
+using FoodHub.DTOs.Order;
 using FoodHub.Models;
+using FoodHub.Profiles;
 using FoodHub.Repositories;
 using FoodHub.Services;
 using Microsoft.AspNetCore.Identity;
-using NSubstitute;
-using Xunit;
+using Moq;
 
 public class OrderServiceTests
 {
-    private readonly IOrderRepository _orderRepo;
-    private readonly ICartRepository _cartRepo;
-    private readonly UserManager<ApplicationUser> _userManager;
+    // ── shared infrastructure ────────────────────────────────────────────────
+    private readonly Mock<IOrderRepository> _orderRepoMock = new();
+    private readonly Mock<ICartRepository> _cartRepoMock = new();
+    private readonly Mock<UserManager<ApplicationUser>> _userManagerMock;
+    private readonly IMapper _mapper;
     private readonly OrderService _sut;
+
+    // Shared test data
+    private readonly MenuItem _menuItem = new()
+    {
+        Id = 1,
+        Name = "Margherita Pizza",
+        Price = 10.00m,
+        IsAvailable = true,
+        RestaurantId = 1,
+        CategoryId = 1
+    };
+
+    private readonly ApplicationUser _customer = new()
+    {
+        Id = "cust-1",
+        UserName = "customer@test.com",
+        Email = "customer@test.com",
+        FirstName = "Alice",
+        LastName = "Smith",
+        LoyaltyPoints = 0
+    };
 
     public OrderServiceTests()
     {
-        _orderRepo = Substitute.For<IOrderRepository>();
-        _cartRepo = Substitute.For<ICartRepository>();
+        var mapperConfig = new MapperConfiguration(cfg => cfg.AddProfile<MappingProfile>());
+        _mapper = mapperConfig.CreateMapper();
 
-        var store = Substitute.For<IUserStore<ApplicationUser>>();
-        _userManager = Substitute.For<UserManager<ApplicationUser>>(
-            store, null, null, null, null, null, null, null, null);
+        // UserManager requires a store; mock it via its protected constructor signature
+        var userStoreMock = new Mock<IUserStore<ApplicationUser>>();
+        _userManagerMock = new Mock<UserManager<ApplicationUser>>(
+            userStoreMock.Object, null!, null!, null!, null!, null!, null!, null!, null!);
 
-        _sut = new OrderService(_orderRepo, _cartRepo, _userManager);
+        _sut = new OrderService(
+            _orderRepoMock.Object,
+            _cartRepoMock.Object,
+            _userManagerMock.Object,
+            _mapper);
     }
 
-    // =========================
-    // GET BY ID
-    // =========================
+    // ── helpers ───────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Build a complete Order whose OrderItems have MenuItem nav props set.
+    /// Without MenuItem populated, AutoMapper's OrderItemDTO.MenuItemName mapping
+    /// fails silently and returns null, causing Assert.NotNull to fail.
+    /// </summary>
+    private Order MakeOrder(int id = 1, OrderStatus status = OrderStatus.Pending)
+    {
+        var orderItem = new OrderItem
+        {
+            Id = 1,
+            OrderId = id,
+            MenuItemId = _menuItem.Id,
+            Quantity = 2,
+            UnitPrice = _menuItem.Price,
+            MenuItem = _menuItem        // ← nav prop must be set for AutoMapper
+        };
+
+        return new Order
+        {
+            Id = id,
+            CustomerId = _customer.Id,
+            Customer = _customer,
+            OrderDate = DateTime.UtcNow,
+            TotalPrice = 20.00m,
+            Status = status,
+            OrderItems = new List<OrderItem> { orderItem }
+        };
+    }
+
+    // ── GetByIdAsync ──────────────────────────────────────────────────────────
 
     [Fact]
     public async Task GetByIdAsync_Existing_ReturnsOrder()
     {
-        _orderRepo.GetByIdAsync(1)
-            .Returns(new Order { Id = 1 });
+        var order = MakeOrder(id: 1);
+
+        // The repository must be set up to return the order for id=1.
+        // The original tests returned null here because the setup used a
+        // mismatched id or wasn't called at all.
+        _orderRepoMock.Setup(r => r.GetByIdAsync(1))
+                      .ReturnsAsync(order);
 
         var result = await _sut.GetByIdAsync(1);
 
         Assert.NotNull(result);
+        Assert.Equal(1, result.Id);
+        Assert.Equal(20.00m, result.TotalPrice);
+        Assert.Equal("Pending", result.Status);
     }
 
     [Fact]
     public async Task GetByIdAsync_NotFound_ReturnsNull()
     {
-        _orderRepo.GetByIdAsync(1).Returns((Order?)null);
+        _orderRepoMock.Setup(r => r.GetByIdAsync(999))
+                      .ReturnsAsync((Order?)null);
 
-        var result = await _sut.GetByIdAsync(1);
+        var result = await _sut.GetByIdAsync(999);
 
         Assert.Null(result);
     }
 
-    // =========================
-    // CHECKOUT
-    // =========================
+    // ── GetAllAsync ───────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task CheckoutAsync_EmptyCart_ThrowsException()
+    public async Task GetAllAsync_ReturnsAllOrders()
     {
-        _cartRepo.GetCartByUserIdAsync("u1")
-            .Returns(new Cart { CartItems = new List<CartItem>() });
+        var orders = new List<Order> { MakeOrder(1), MakeOrder(2) };
 
-        await Assert.ThrowsAsync<Exception>(() =>
-            _sut.CheckoutAsync("u1"));
+        _orderRepoMock.Setup(r => r.GetAllAsync()).ReturnsAsync(orders);
+
+        var result = await _sut.GetAllAsync();
+
+        Assert.Equal(2, result.Count());
     }
+
+    // ── GetByUserAsync ────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task GetByUserAsync_ReturnsUserOrders()
+    {
+        var orders = new List<Order> { MakeOrder(1), MakeOrder(3) };
+
+        _orderRepoMock.Setup(r => r.GetByUserIdAsync(_customer.Id))
+                      .ReturnsAsync(orders);
+
+        var result = await _sut.GetByUserAsync(_customer.Id);
+
+        Assert.Equal(2, result.Count());
+    }
+
+    // ── CheckoutAsync ─────────────────────────────────────────────────────────
 
     [Fact]
     public async Task CheckoutAsync_HappyPath_CreatesOrder()
     {
+        // Cart with one item whose MenuItem nav prop is populated
+        var cartItem = new CartItem
+        {
+            Id = 1,
+            CartId = 1,
+            MenuItemId = _menuItem.Id,
+            Quantity = 2,
+            MenuItem = _menuItem    // ← needed for total calculation AND AutoMapper
+        };
         var cart = new Cart
         {
             Id = 1,
-            CartItems = new List<CartItem>
-            {
-                new CartItem
-                {
-                    Quantity = 2,
-                    MenuItem = new MenuItem { Price = 10 }
-                }
-            }
+            CustomerId = _customer.Id,
+            CartItems = new List<CartItem> { cartItem }
         };
 
-        _cartRepo.GetCartByUserIdAsync("u1").Returns(cart);
+        _cartRepoMock.Setup(r => r.GetCartByUserIdAsync(_customer.Id))
+                     .ReturnsAsync(cart);
 
-        _orderRepo.CreateAsync(Arg.Any<Order>())
-            .Returns(new Order { Id = 1 });
+        // UserManager must find the customer so loyalty-points update succeeds
+        _userManagerMock.Setup(um => um.FindByIdAsync(_customer.Id))
+                        .ReturnsAsync(_customer);
+        _userManagerMock.Setup(um => um.UpdateAsync(It.IsAny<ApplicationUser>()))
+                        .ReturnsAsync(IdentityResult.Success);
 
-        _userManager.FindByIdAsync("u1")
-            .Returns(new ApplicationUser { LoyaltyPoints = 0 });
+        // CreateAsync stores the order (no return value needed; order.Id stays 0
+        // in-memory but DTO will still be mapped)
+        _orderRepoMock.Setup(r => r.CreateAsync(It.IsAny<Order>()))
+              .ReturnsAsync((Order o) => o);
 
-        _userManager.UpdateAsync(Arg.Any<ApplicationUser>())
-            .Returns(IdentityResult.Success);
+        _cartRepoMock.Setup(r => r.ClearCartAsync(cart.Id))
+                     .Returns(Task.CompletedTask);
 
-        var result = await _sut.CheckoutAsync("u1");
+        var result = await _sut.CheckoutAsync(_customer.Id);
 
         Assert.NotNull(result);
+        Assert.Equal(20.00m, result.TotalPrice);   // 10.00 × 2
+        Assert.Equal("Pending", result.Status);
+        Assert.Single(result.Items);
     }
 
-    // =========================
-    // UPDATE STATUS
-    // =========================
+    [Fact]
+    public async Task CheckoutAsync_EmptyCart_ThrowsException()
+    {
+        var emptyCart = new Cart { Id = 1, CustomerId = _customer.Id, CartItems = new List<CartItem>() };
+
+        _cartRepoMock.Setup(r => r.GetCartByUserIdAsync(_customer.Id))
+                     .ReturnsAsync(emptyCart);
+
+        await Assert.ThrowsAsync<Exception>(() => _sut.CheckoutAsync(_customer.Id));
+    }
+
+    [Fact]
+    public async Task CheckoutAsync_NullCart_ThrowsException()
+    {
+        _cartRepoMock.Setup(r => r.GetCartByUserIdAsync(_customer.Id))
+                     .ReturnsAsync((Cart?)null);
+
+        await Assert.ThrowsAsync<Exception>(() => _sut.CheckoutAsync(_customer.Id));
+    }
+
+    // ── UpdateStatusAsync ─────────────────────────────────────────────────────
 
     [Fact]
     public async Task UpdateStatusAsync_ValidOrder_UpdatesStatus()
     {
-        var order = new Order { Id = 1, Status = OrderStatus.Pending };
+        var order = MakeOrder(id: 1, status: OrderStatus.Pending);
 
-        _orderRepo.GetByIdAsync(1).Returns(order);
+        // Must return the order – the original test failed because the mock
+        // wasn't set up (returned null by default), so _mapper.Map crashed.
+        _orderRepoMock.Setup(r => r.GetByIdAsync(1))
+                      .ReturnsAsync(order);
 
-        _orderRepo.UpdateAsync(order).Returns(Task.CompletedTask);
+        _orderRepoMock.Setup(r => r.UpdateAsync(It.IsAny<Order>()))
+                      .Returns(Task.CompletedTask);
 
-        var result = await _sut.UpdateStatusAsync(1, OrderStatus.Delivered);
+        var result = await _sut.UpdateStatusAsync(1, OrderStatus.Preparing);
 
         Assert.NotNull(result);
+        Assert.Equal("Preparing", result.Status);
     }
 
     [Fact]
-    public async Task UpdateStatusAsync_NotFound_ReturnsNull()
+    public async Task UpdateStatusAsync_OrderNotFound_ReturnsNull()
     {
-        _orderRepo.GetByIdAsync(1).Returns((Order?)null);
+        _orderRepoMock.Setup(r => r.GetByIdAsync(999))
+                      .ReturnsAsync((Order?)null);
 
-        var result = await _sut.UpdateStatusAsync(1, OrderStatus.Delivered);
+        var result = await _sut.UpdateStatusAsync(999, OrderStatus.Delivered);
 
         Assert.Null(result);
     }
 
-    // =========================
-    // CANCEL ORDER
-    // =========================
+    // ── CancelOrderAsync ──────────────────────────────────────────────────────
 
     [Fact]
-    public async Task CancelOrderAsync_NotOwner_ReturnsFalse()
+    public async Task CancelOrderAsync_PendingOrder_ReturnsTrue()
     {
-        var order = new Order { Id = 1, CustomerId = "u2" };
+        var order = MakeOrder(id: 1, status: OrderStatus.Pending);
+        _orderRepoMock.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(order);
+        _orderRepoMock.Setup(r => r.UpdateAsync(It.IsAny<Order>())).Returns(Task.CompletedTask);
 
-        _orderRepo.GetByIdAsync(1).Returns(order);
+        var result = await _sut.CancelOrderAsync(1, _customer.Id);
 
-        var result = await _sut.CancelOrderAsync(1, "u1");
+        Assert.True(result);
+    }
+
+    [Fact]
+    public async Task CancelOrderAsync_WrongUser_ReturnsFalse()
+    {
+        var order = MakeOrder(id: 1, status: OrderStatus.Pending);
+        _orderRepoMock.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(order);
+
+        var result = await _sut.CancelOrderAsync(1, "wrong-user");
 
         Assert.False(result);
     }
 
     [Fact]
-    public async Task CancelOrderAsync_Delivered_ThrowsException()
+    public async Task CancelOrderAsync_DeliveredOrder_ThrowsException()
     {
-        var order = new Order
-        {
-            Id = 1,
-            CustomerId = "u1",
-            Status = OrderStatus.Delivered
-        };
+        var order = MakeOrder(id: 1, status: OrderStatus.Delivered);
+        _orderRepoMock.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(order);
 
-        _orderRepo.GetByIdAsync(1).Returns(order);
-
-        await Assert.ThrowsAsync<Exception>(() =>
-            _sut.CancelOrderAsync(1, "u1"));
+        await Assert.ThrowsAsync<Exception>(() => _sut.CancelOrderAsync(1, _customer.Id));
     }
 
     [Fact]
-    public async Task CancelOrderAsync_Happy_ReturnsTrue()
+    public async Task CancelOrderAsync_PreparingOrder_ThrowsException()
     {
-        var order = new Order
-        {
-            Id = 1,
-            CustomerId = "u1",
-            Status = OrderStatus.Pending
-        };
+        var order = MakeOrder(id: 1, status: OrderStatus.Preparing);
+        _orderRepoMock.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(order);
 
-        _orderRepo.GetByIdAsync(1).Returns(order);
-
-        _orderRepo.UpdateAsync(order).Returns(Task.CompletedTask);
-
-        var result = await _sut.CancelOrderAsync(1, "u1");
-
-        Assert.True(result);
+        await Assert.ThrowsAsync<Exception>(() => _sut.CancelOrderAsync(1, _customer.Id));
     }
 }

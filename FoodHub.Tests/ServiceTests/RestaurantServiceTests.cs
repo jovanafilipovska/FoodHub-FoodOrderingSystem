@@ -1,5 +1,6 @@
 ﻿using AutoMapper;
 using FoodHub.DTOs.Category;
+using FoodHub.DTOs.Restaurant;
 using FoodHub.Models;
 using FoodHub.Repositories;
 using FoodHub.Services;

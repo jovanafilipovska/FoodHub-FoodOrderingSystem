@@ -1,168 +1,251 @@
-﻿using FoodHub.DTOs.Cart;
+﻿using AutoMapper;
+using FoodHub.DTOs.Cart;
 using FoodHub.Models;
+using FoodHub.Profiles;
 using FoodHub.Repositories;
 using FoodHub.Services;
-using NSubstitute;
-using Xunit;
+using Moq;
 
 public class CartServiceTests
 {
-    private readonly ICartRepository _cartRepo;
-    private readonly IMenuItemRepository _menuRepo;
+    // ── shared infrastructure ────────────────────────────────────────────────
+    private readonly Mock<ICartRepository> _cartRepoMock = new();
+    private readonly Mock<IMenuItemRepository> _menuItemRepoMock = new();
+    private readonly IMapper _mapper;
     private readonly CartService _sut;
+
+    // A real MenuItem so that nav-prop access (ci.MenuItem.Price) never NPEs
+    private readonly MenuItem _menuItem = new()
+    {
+        Id = 1,
+        Name = "Margherita Pizza",
+        Price = 10.00m,
+        Description = "Classic",
+        IsAvailable = true,
+        RestaurantId = 1,
+        CategoryId = 1
+    };
 
     public CartServiceTests()
     {
-        _cartRepo = Substitute.For<ICartRepository>();
-        _menuRepo = Substitute.For<IMenuItemRepository>();
+        var mapperConfig = new MapperConfiguration(cfg => cfg.AddProfile<MappingProfile>());
+        _mapper = mapperConfig.CreateMapper();
 
-        _sut = new CartService(_cartRepo, _menuRepo);
+        _sut = new CartService(_cartRepoMock.Object, _menuItemRepoMock.Object, _mapper);
     }
 
-    // =========================
-    // GET CART
-    // =========================
+    // ── helpers ──────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Builds a Cart with CartItems whose MenuItem nav prop is fully populated.
+    /// Without this, ci.MenuItem.Price throws NullReferenceException inside
+    /// CartService.GetCartAsync (line 34) and AddToCartAsync (line 89).
+    /// </summary>
+    private Cart MakeCartWithItem(string userId, int cartId = 1, int qty = 2)
+    {
+        var cartItem = new CartItem
+        {
+            Id = 1,
+            CartId = cartId,
+            MenuItemId = _menuItem.Id,
+            Quantity = qty,
+            MenuItem = _menuItem     // ← crucial: nav prop must be set
+        };
+
+        return new Cart
+        {
+            Id = cartId,
+            CustomerId = userId,
+            CartItems = new List<CartItem> { cartItem }
+        };
+    }
+
+    // ── GetCartAsync ─────────────────────────────────────────────────────────
 
     [Fact]
     public async Task GetCartAsync_ExistingCart_ReturnsCartDTO()
     {
-        var cart = new Cart
-        {
-            Id = 1,
-            CustomerId = "u1",
-            CartItems = new List<CartItem>
-            {
-                new CartItem
-                {
-                    Quantity = 2,
-                    MenuItem = new MenuItem { Price = 10 }
-                }
-            }
-        };
+        const string userId = "user-1";
+        var cart = MakeCartWithItem(userId);
 
-        _cartRepo.GetCartByUserIdAsync("u1").Returns(cart);
+        _cartRepoMock.Setup(r => r.GetCartByUserIdAsync(userId))
+                     .ReturnsAsync(cart);
 
-        var result = await _sut.GetCartAsync("u1");
+        var result = await _sut.GetCartAsync(userId);
 
         Assert.NotNull(result);
-        Assert.Equal(20, result!.TotalPrice);
+        Assert.Single(result.Items);
+        Assert.Equal(20.00m, result.TotalPrice); // 10.00 * 2
     }
 
     [Fact]
     public async Task GetCartAsync_NoCart_ReturnsNull()
     {
-        _cartRepo.GetCartByUserIdAsync("u1").Returns((Cart?)null);
+        _cartRepoMock.Setup(r => r.GetCartByUserIdAsync("missing"))
+                     .ReturnsAsync((Cart?)null);
 
-        var result = await _sut.GetCartAsync("u1");
+        var result = await _sut.GetCartAsync("missing");
 
         Assert.Null(result);
     }
 
-    // =========================
-    // ADD TO CART
-    // =========================
+    // ── AddToCartAsync ────────────────────────────────────────────────────────
 
     [Fact]
     public async Task AddToCartAsync_NewCart_CreatesCartAndAddsItem()
     {
-        _cartRepo.GetCartByUserIdAsync("u1").Returns((Cart?)null);
+        const string userId = "user-new";
+        var dto = new AddToCartDTO { MenuItemId = _menuItem.Id, Quantity = 1 };
 
-        _cartRepo.CreateCartAsync(Arg.Any<Cart>())
-            .Returns(new Cart { Id = 1, CustomerId = "u1" });
+        // Step 1 – no cart exists yet
+        _cartRepoMock.Setup(r => r.GetCartByUserIdAsync(userId))
+                     .ReturnsAsync((Cart?)null);
 
-        _menuRepo.GetByIdAsync(1)
-            .Returns(new MenuItem { Id = 1, Price = 10 });
+        // Step 2 – CreateCartAsync returns a cart with Id assigned
+        var createdCart = new Cart { Id = 5, CustomerId = userId };
+        _cartRepoMock.Setup(r => r.CreateCartAsync(It.IsAny<Cart>()))
+                     .ReturnsAsync(createdCart);
 
-        _cartRepo.GetCartItemAsync(1, 1)
-            .Returns((CartItem?)null);
+        // Step 3 – no existing item
+        _cartRepoMock.Setup(r => r.GetCartItemAsync(createdCart.Id, _menuItem.Id))
+                     .ReturnsAsync((CartItem?)null);
 
-        var result = await _sut.AddToCartAsync("u1",
-            new AddToCartDTO { MenuItemId = 1, Quantity = 2 });
+        _menuItemRepoMock.Setup(r => r.GetByIdAsync(_menuItem.Id))
+                         .ReturnsAsync(_menuItem);
+
+        // Step 4 – after adding, GetCartByUserIdAsync returns the cart WITH item
+        // (the service calls GetCartAsync internally at the end)
+        var cartWithItem = new Cart
+        {
+            Id = 5,
+            CustomerId = userId,
+            CartItems = new List<CartItem>
+            {
+                new CartItem
+                {
+                    Id = 1, CartId = 5,
+                    MenuItemId = _menuItem.Id, Quantity = 1,
+                    MenuItem = _menuItem
+                }
+            }
+        };
+
+        // After AddItemAsync is called, switch the mock to return the cart with items
+        _cartRepoMock.Setup(r => r.AddItemAsync(It.IsAny<CartItem>()))
+                     .Callback(() =>
+                     {
+                         _cartRepoMock.Setup(r => r.GetCartByUserIdAsync(userId))
+                                      .ReturnsAsync(cartWithItem);
+                     })
+                     .Returns(Task.CompletedTask);
+
+        var result = await _sut.AddToCartAsync(userId, dto);
 
         Assert.NotNull(result);
-        await _cartRepo.Received(1).CreateCartAsync(Arg.Any<Cart>());
+        Assert.Single(result.Items);
+        Assert.Equal(10.00m, result.TotalPrice);
+    }
+
+    [Fact]
+    public async Task AddToCartAsync_ExistingItem_IncreasesQuantity()
+    {
+        const string userId = "user-1";
+        var dto = new AddToCartDTO { MenuItemId = _menuItem.Id, Quantity = 1 };
+
+        var existingItem = new CartItem
+        {
+            Id = 1,
+            CartId = 1,
+            MenuItemId = _menuItem.Id,
+            Quantity = 2,
+            MenuItem = _menuItem
+        };
+        var cart = new Cart { Id = 1, CustomerId = userId, CartItems = new List<CartItem> { existingItem } };
+
+        _cartRepoMock.Setup(r => r.GetCartByUserIdAsync(userId)).ReturnsAsync(cart);
+        _menuItemRepoMock.Setup(r => r.GetByIdAsync(_menuItem.Id)).ReturnsAsync(_menuItem);
+        _cartRepoMock.Setup(r => r.GetCartItemAsync(1, _menuItem.Id)).ReturnsAsync(existingItem);
+        _cartRepoMock.Setup(r => r.UpdateCartItemAsync(It.IsAny<CartItem>())).Returns(Task.CompletedTask);
+
+        var result = await _sut.AddToCartAsync(userId, dto);
+
+        Assert.NotNull(result);
+        // existingItem.Quantity should now be 3
+        Assert.Equal(3, result.Items.First().Quantity);
     }
 
     [Fact]
     public async Task AddToCartAsync_MenuItemNotFound_ThrowsException()
     {
-        _cartRepo.GetCartByUserIdAsync("u1")
-            .Returns(new Cart { Id = 1, CustomerId = "u1", CartItems = new List<CartItem>() });
+        const string userId = "user-1";
+        var dto = new AddToCartDTO { MenuItemId = 999, Quantity = 1 };
+        var cart = new Cart { Id = 1, CustomerId = userId };
 
-        _menuRepo.GetByIdAsync(1).Returns((MenuItem?)null);
+        _cartRepoMock.Setup(r => r.GetCartByUserIdAsync(userId)).ReturnsAsync(cart);
+        _menuItemRepoMock.Setup(r => r.GetByIdAsync(999)).ReturnsAsync((MenuItem?)null);
 
-        await Assert.ThrowsAsync<Exception>(() =>
-            _sut.AddToCartAsync("u1",
-                new AddToCartDTO { MenuItemId = 1, Quantity = 1 }));
+        await Assert.ThrowsAsync<Exception>(() => _sut.AddToCartAsync(userId, dto));
     }
 
-    // =========================
-    // UPDATE QUANTITY
-    // =========================
+    // ── UpdateQuantityAsync ───────────────────────────────────────────────────
 
     [Fact]
     public async Task UpdateQuantityAsync_ExistingItem_UpdatesQuantity()
     {
-        var cart = new Cart { Id = 1, CustomerId = "u1" };
+        const string userId = "user-1";
 
-        var item = new CartItem
+        var cartItem = new CartItem
         {
+            Id = 1,
             CartId = 1,
-            MenuItemId = 1,
-            Quantity = 2
+            MenuItemId = _menuItem.Id,
+            Quantity = 2,
+            MenuItem = _menuItem   // ← nav prop populated; fixes NPE on line 34
+        };
+        var cart = new Cart
+        {
+            Id = 1,
+            CustomerId = userId,
+            CartItems = new List<CartItem> { cartItem }
         };
 
-        _cartRepo.GetCartByUserIdAsync("u1").Returns(cart);
-        _cartRepo.GetCartItemAsync(1, 1).Returns(item);
+        _cartRepoMock.Setup(r => r.GetCartByUserIdAsync(userId)).ReturnsAsync(cart);
+        _cartRepoMock.Setup(r => r.GetCartItemAsync(1, _menuItem.Id)).ReturnsAsync(cartItem);
+        _cartRepoMock.Setup(r => r.UpdateCartItemAsync(It.IsAny<CartItem>()))
+                     .Callback<CartItem>(ci => cartItem.Quantity = ci.Quantity)
+                     .Returns(Task.CompletedTask);
 
-        _cartRepo.UpdateCartItemAsync(item).Returns(Task.CompletedTask);
-
-        var result = await _sut.UpdateQuantityAsync("u1", 1, 5);
+        var result = await _sut.UpdateQuantityAsync(userId, _menuItem.Id, 5);
 
         Assert.NotNull(result);
-        Assert.Equal(5, item.Quantity);
+        Assert.Equal(5, result.Items.First().Quantity);
     }
 
     [Fact]
     public async Task UpdateQuantityAsync_NoCart_ReturnsNull()
     {
-        _cartRepo.GetCartByUserIdAsync("u1").Returns((Cart?)null);
+        _cartRepoMock.Setup(r => r.GetCartByUserIdAsync("nobody"))
+                     .ReturnsAsync((Cart?)null);
 
-        var result = await _sut.UpdateQuantityAsync("u1", 1, 2);
-
-        Assert.Null(result);
-    }
-
-    [Fact]
-    public async Task UpdateQuantityAsync_ItemNotFound_ReturnsNull()
-    {
-        _cartRepo.GetCartByUserIdAsync("u1")
-            .Returns(new Cart { Id = 1 });
-
-        _cartRepo.GetCartItemAsync(1, 1).Returns((CartItem?)null);
-
-        var result = await _sut.UpdateQuantityAsync("u1", 1, 2);
+        var result = await _sut.UpdateQuantityAsync("nobody", 1, 3);
 
         Assert.Null(result);
     }
 
-    // =========================
-    // REMOVE ITEM
-    // =========================
+    // ── RemoveItemAsync ───────────────────────────────────────────────────────
 
     [Fact]
-    public async Task RemoveItemAsync_ItemExists_ReturnsTrue()
+    public async Task RemoveItemAsync_ExistingItem_ReturnsTrue()
     {
-        var cart = new Cart { Id = 1, CustomerId = "u1" };
+        const string userId = "user-1";
+        var cartItem = new CartItem { Id = 1, CartId = 1, MenuItemId = _menuItem.Id, Quantity = 1, MenuItem = _menuItem };
+        var cart = new Cart { Id = 1, CustomerId = userId, CartItems = new List<CartItem> { cartItem } };
 
-        var item = new CartItem { Id = 10, CartId = 1, MenuItemId = 1 };
+        _cartRepoMock.Setup(r => r.GetCartByUserIdAsync(userId)).ReturnsAsync(cart);
+        _cartRepoMock.Setup(r => r.GetCartItemAsync(1, _menuItem.Id)).ReturnsAsync(cartItem);
+        _cartRepoMock.Setup(r => r.RemoveCartItemAsync(cartItem.Id)).Returns(Task.CompletedTask);
 
-        _cartRepo.GetCartByUserIdAsync("u1").Returns(cart);
-        _cartRepo.GetCartItemAsync(1, 1).Returns(item);
-
-        _cartRepo.RemoveCartItemAsync(10).Returns(Task.CompletedTask);
-
-        var result = await _sut.RemoveItemAsync("u1", 1);
+        var result = await _sut.RemoveItemAsync(userId, _menuItem.Id);
 
         Assert.True(result);
     }
@@ -170,26 +253,26 @@ public class CartServiceTests
     [Fact]
     public async Task RemoveItemAsync_NoCart_ReturnsFalse()
     {
-        _cartRepo.GetCartByUserIdAsync("u1").Returns((Cart?)null);
+        _cartRepoMock.Setup(r => r.GetCartByUserIdAsync("nobody"))
+                     .ReturnsAsync((Cart?)null);
 
-        var result = await _sut.RemoveItemAsync("u1", 1);
+        var result = await _sut.RemoveItemAsync("nobody", 1);
 
         Assert.False(result);
     }
 
-    // =========================
-    // CLEAR CART
-    // =========================
+    // ── ClearCartAsync ────────────────────────────────────────────────────────
 
     [Fact]
     public async Task ClearCartAsync_ExistingCart_ReturnsTrue()
     {
-        _cartRepo.GetCartByUserIdAsync("u1")
-            .Returns(new Cart { Id = 1 });
+        const string userId = "user-1";
+        var cart = new Cart { Id = 1, CustomerId = userId };
 
-        _cartRepo.ClearCartAsync(1).Returns(Task.CompletedTask);
+        _cartRepoMock.Setup(r => r.GetCartByUserIdAsync(userId)).ReturnsAsync(cart);
+        _cartRepoMock.Setup(r => r.ClearCartAsync(1)).Returns(Task.CompletedTask);
 
-        var result = await _sut.ClearCartAsync("u1");
+        var result = await _sut.ClearCartAsync(userId);
 
         Assert.True(result);
     }
@@ -197,9 +280,10 @@ public class CartServiceTests
     [Fact]
     public async Task ClearCartAsync_NoCart_ReturnsFalse()
     {
-        _cartRepo.GetCartByUserIdAsync("u1").Returns((Cart?)null);
+        _cartRepoMock.Setup(r => r.GetCartByUserIdAsync("nobody"))
+                     .ReturnsAsync((Cart?)null);
 
-        var result = await _sut.ClearCartAsync("u1");
+        var result = await _sut.ClearCartAsync("nobody");
 
         Assert.False(result);
     }

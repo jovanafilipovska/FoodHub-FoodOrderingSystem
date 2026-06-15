@@ -25,4 +25,11 @@
     <PackageReference Include="Swashbuckle.AspNetCore" Version="9.0.6" />
   </ItemGroup>
 
+  <ItemGroup>
+  <Compile Remove="FoodHub.Tests/**" />
+  <Content Remove="FoodHub.Tests/**" />
+  <EmbeddedResource Remove="FoodHub.Tests/**" />
+  <None Remove="FoodHub.Tests/**" />
+</ItemGroup>
+
 </Project>

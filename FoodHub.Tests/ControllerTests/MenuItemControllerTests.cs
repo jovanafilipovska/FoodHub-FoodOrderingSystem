@@ -1,5 +1,6 @@
 ﻿using FoodHub.Controllers;
 using FoodHub.DTOs.Category;
+using FoodHub.DTOs.MenuItem;
 using FoodHub.Services;
 using Microsoft.AspNetCore.Mvc;
 using NSubstitute;

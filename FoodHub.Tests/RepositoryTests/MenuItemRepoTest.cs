@@ -1,111 +1,178 @@
-using FoodHub.Data;
+﻿using FoodHub.Data;
 using FoodHub.Models;
 using FoodHub.Repositories;
 using Microsoft.EntityFrameworkCore;
-using Xunit;
 
-namespace FoodHub.Test.RepositoryTests
+namespace FoodHub.Test.RepositoryTests;
+
+public class MenuItemRepoTests : IDisposable
 {
-    public class MenuItemRepoTests : IDisposable
+    private readonly ApplicationDbContext _context;
+    private readonly MenuItemRepository _repo;
+
+    public MenuItemRepoTests()
     {
-        private readonly ApplicationDbContext _ctx;
-        private readonly MenuItemRepository _sut;
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options;
 
-        public MenuItemRepoTests()
-        {
-            var options = new DbContextOptionsBuilder<ApplicationDbContext>()
-                .UseInMemoryDatabase($"menu-{Guid.NewGuid()}")
-                .Options;
+        _context = new ApplicationDbContext(options);
+        _repo = new MenuItemRepository(_context);
 
-            _ctx = new ApplicationDbContext(options);
-
-            _ctx.MenuItems.AddRange(
-                new MenuItem { Id = 1, Name = "Pizza", RestaurantId = 1, CategoryId = 1, IsAvailable = true },
-                new MenuItem { Id = 2, Name = "Burger", RestaurantId = 1, CategoryId = 2, IsAvailable = true },
-                new MenuItem { Id = 3, Name = "Ice Cream", RestaurantId = 2, CategoryId = 3, IsAvailable = false }
-            );
-
-            _ctx.SaveChanges();
-
-            _sut = new MenuItemRepository(_ctx);
-        }
-
-        public void Dispose() => _ctx.Dispose();
-
-        [Fact]
-        public async Task GetAllAsync_ShouldReturnAllItems()
-        {
-            var result = await _sut.GetAllAsync();
-
-            Assert.Equal(3, result.Count());
-        }
-
-        [Fact]
-        public async Task GetByIdAsync_ShouldReturnItemWithIncludes()
-        {
-            var result = await _sut.GetByIdAsync(1);
-
-            Assert.NotNull(result);
-            Assert.NotNull(result!.Restaurant);
-            Assert.NotNull(result.Category);
-        }
-
-        [Fact]
-        public async Task GetByRestaurantAsync_ShouldReturnCorrectItems()
-        {
-            var result = await _sut.GetByRestaurantAsync(1);
-
-            Assert.Equal(2, result.Count());
-        }
-
-        [Fact]
-        public async Task GetAvailableItemsAsync_ShouldReturnOnlyAvailable()
-        {
-            var result = await _sut.GetAvailableItemsAsync();
-
-            Assert.All(result, m => Assert.True(m.IsAvailable));
-        }
-
-        [Fact]
-        public async Task GetAvailableItemsAsync_ShouldNotReturnUnavailableItems()
-        {
-            var result = await _sut.GetAvailableItemsAsync();
-
-            Assert.DoesNotContain(result, m => !m.IsAvailable);
-        }
-
-        [Fact]
-        public async Task CreateAsync_ShouldAddItem()
-        {
-            await _sut.CreateAsync(new MenuItem
-            {
-                Name = "Salad",
-                RestaurantId = 1,
-                CategoryId = 1,
-                IsAvailable = true
-            });
-
-            Assert.Equal(4, _ctx.MenuItems.Count());
-        }
-
-        [Fact]
-        public async Task UpdateAsync_ShouldModifyItem()
-        {
-            var item = await _sut.GetByIdAsync(1);
-
-            item!.Name = "Updated";
-
-            await _sut.UpdateAsync(item);
-
-            Assert.Equal("Updated", (await _sut.GetByIdAsync(1))!.Name);
-        }
-
-        [Fact]
-        public async Task DeleteAsync_ShouldRemoveItem()
-        {
-            await _sut.DeleteAsync(1);
-
-            Assert.Null(await _sut.GetByIdAsync(1));
-        }
+        SeedData();
     }
+
+    private void SeedData()
+    {
+        var owner = new ApplicationUser
+        {
+            Id = "owner-1",
+            UserName = "owner@test.com",
+            Email = "owner@test.com",
+            FirstName = "Jane",
+            LastName = "Doe"
+        };
+        _context.Users.Add(owner);
+
+        var restaurant = new Restaurant
+        {
+            Id = 10,
+            Name = "Test Restaurant",
+            Address = "1 Test St",
+            PhoneNumber = "555-9999",
+            OwnerId = "owner-1",
+            Owner = owner
+        };
+        _context.Restaurants.Add(restaurant);
+
+        var category = new Category
+        {
+            Id = 5,
+            Name = "Main Course"
+        };
+        _context.Categories.Add(category);
+
+        _context.MenuItems.AddRange(
+            new MenuItem
+            {
+                Id = 1,
+                Name = "Margherita Pizza",
+                Price = 9.99m,
+                Description = "Classic margherita",
+                IsAvailable = true,
+                RestaurantId = 10,
+                Restaurant = restaurant,
+                CategoryId = 5,
+                Category = category
+            },
+            new MenuItem
+            {
+                Id = 2,
+                Name = "Cheeseburger",
+                Price = 7.49m,
+                Description = "Double cheeseburger",
+                IsAvailable = true,
+                RestaurantId = 10,
+                Restaurant = restaurant,
+                CategoryId = 5,
+                Category = category
+            },
+            new MenuItem
+            {
+                Id = 3,
+                Name = "Caesar Salad",
+                Price = 5.99m,
+                Description = "Fresh caesar",
+                IsAvailable = false,
+                RestaurantId = 10,
+                Restaurant = restaurant,
+                CategoryId = 5,
+                Category = category
+            }
+        );
+
+        _context.SaveChanges();
+    }
+
+    // ── tests ────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task GetAllAsync_ShouldReturnAllItems()
+    {
+        var result = await _repo.GetAllAsync();
+
+        Assert.Equal(3, result.Count());
+    }
+
+    [Fact]
+    public async Task GetByIdAsync_ShouldReturnItemWithIncludes()
+    {
+        var result = await _repo.GetByIdAsync(1);
+
+        Assert.NotNull(result);
+        Assert.Equal("Margherita Pizza", result.Name);
+        Assert.NotNull(result.Restaurant);
+        Assert.NotNull(result.Category);
+        Assert.Equal("Test Restaurant", result.Restaurant.Name);
+    }
+
+    [Fact]
+    public async Task GetByRestaurantAsync_ShouldReturnItemsForRestaurant()
+    {
+        var result = await _repo.GetByRestaurantAsync(10);
+
+        Assert.Equal(3, result.Count());
+    }
+
+    [Fact]
+    public async Task GetAvailableItemsAsync_ShouldReturnOnlyAvailable()
+    {
+        var result = await _repo.GetAvailableItemsAsync();
+
+        Assert.Equal(2, result.Count());
+        Assert.All(result, item => Assert.True(item.IsAvailable));
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldAddItem()
+    {
+        var newItem = new MenuItem
+        {
+            Name = "Tiramisu",
+            Price = 4.99m,
+            Description = "Italian dessert",
+            IsAvailable = true,
+            RestaurantId = 10,
+            CategoryId = 5
+        };
+
+        var created = await _repo.CreateAsync(newItem);
+
+        Assert.True(created.Id > 0);
+        Assert.Equal(4, _context.MenuItems.Count());
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ShouldModifyItem()
+    {
+        // Must fetch from the tracked context first, not through a separate repo call
+        var item = await _context.MenuItems.FindAsync(1);
+        Assert.NotNull(item);
+
+        item.Price = 12.99m;
+        await _repo.UpdateAsync(item);
+
+        var updated = await _context.MenuItems.FindAsync(1);
+        Assert.Equal(12.99m, updated!.Price);
+    }
+
+    [Fact]
+    public async Task DeleteAsync_ShouldRemoveItem()
+    {
+        await _repo.DeleteAsync(3);
+
+        Assert.Equal(2, _context.MenuItems.Count());
+    }
+
+    public void Dispose() => _context.Dispose();
 }
